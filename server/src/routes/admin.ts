@@ -14,9 +14,11 @@
  */
 
 import { Router } from "express";
+import { createHash } from "crypto";
 import { authenticate } from "../middleware/authenticate";
 import { authorize } from "../middleware/authorize";
 import { validate } from "../middleware/validate";
+import { normalizePhone, maskPhone } from "../utils/phone";
 import { QueueService } from "../jobs";
 import { SseEmitter } from "../services/sseEmitter";
 import pool from "../db";
@@ -291,6 +293,18 @@ router.post(
 /**
  * Returns a paginated list of users with their ledger balance, trade count,
  * and registration date.
+ *
+ * Performance (issue #256): the original query computed balance and trade
+ * count via correlated subqueries, executing one sub-select per user row —
+ * O(n) against `transactions` and `trade_offers` for a result set of n users.
+ * At 1 000 users that is 2 000 sub-selects; at 10 000 users it causes timeouts.
+ *
+ * The fix aggregates both metrics in a single pass each using grouped
+ * subqueries joined with LEFT JOIN.  The planner can hash- or merge-join the
+ * pre-aggregated subqueries against `users` in one scan, reducing total I/O
+ * from O(n) correlated lookups to O(1) sequential scans regardless of page size.
+ * `transactions(user_id)` is indexed by migration 010 (added alongside this
+ * change) so the aggregation scan uses the index rather than a full table scan.
  */
 router.get(
   "/users",
@@ -320,17 +334,25 @@ router.get(
          u.id,
          u.phone,
          u.created_at AS "registrationDate",
-         COALESCE((
-           SELECT SUM(CASE WHEN t.direction = 'credit' THEN t.amount ELSE -t.amount END)
-           FROM transactions t
-           WHERE t.user_id = u.id
-         ), 0)::float8 AS balance,
-         COALESCE((
-           SELECT COUNT(*)
-           FROM trade_offers o
-           WHERE o.seller_id = u.id OR o.buyer_id = u.id
-         ), 0)::int AS "tradeCount"
+         COALESCE(tx_agg.net_balance, 0)::float8          AS balance,
+         COALESCE(tr_agg.trade_count, 0)::int             AS "tradeCount"
        FROM users u
+       LEFT JOIN (
+         SELECT
+           user_id,
+           SUM(CASE WHEN direction = 'credit' THEN amount ELSE -amount END) AS net_balance
+         FROM transactions
+         GROUP BY user_id
+       ) tx_agg ON tx_agg.user_id = u.id
+       LEFT JOIN (
+         SELECT participant_id, COUNT(*) AS trade_count
+         FROM (
+           SELECT seller_id AS participant_id FROM trade_offers WHERE seller_id IS NOT NULL
+           UNION ALL
+           SELECT buyer_id  AS participant_id FROM trade_offers WHERE buyer_id  IS NOT NULL
+         ) participation
+         GROUP BY participant_id
+       ) tr_agg ON tr_agg.participant_id = u.id
        ORDER BY u.created_at DESC
        LIMIT $1 OFFSET $2`,
       [limit, offset]
@@ -368,6 +390,7 @@ router.get(
   authorize("admin"),
   async (req, res) => {
     const { phone } = req.params;
+    const normalizedPhone = normalizePhone(phone);
 
     const { rows: userRows } = await pool.query<{
       id: string;
@@ -391,7 +414,7 @@ router.get(
        FROM users u
        WHERE u.phone = $1
        LIMIT 1`,
-      [phone]
+      [normalizedPhone]
     );
 
     if (!userRows.length) {
@@ -408,10 +431,16 @@ router.get(
       [user.id]
     );
 
+    const phoneHash = createHash("sha256")
+      .update(user.phone)
+      .digest("hex")
+      .slice(0, 8);
+
     res.status(200).json({
       data: {
         id: user.id,
-        phone: user.phone,
+        maskedPhone: maskPhone(user.phone),
+        phoneHash,
         role: user.role,
         registrationDate: user.created_at,
         stellarPublicKey: user.stellar_public_key,

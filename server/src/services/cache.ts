@@ -24,52 +24,69 @@ import logger from "../utils/logger";
 class RedisCacheClient {
   private socket: Socket | null = null;
   private connected = false;
+  private connectPromise: Promise<void> | null = null;
   private queue: Array<{
     resolve: (v: string | null) => void;
     reject: (e: Error) => void;
   }> = [];
   private buffer = "";
 
-  connect(url: string): void {
-    try {
-      const parsed = new URL(url);
-      const host = parsed.hostname;
-      const port = parseInt(parsed.port || "6379", 10);
-      const pass = parsed.password || null;
-
-      this.socket = new Socket();
-      this.socket.setEncoding("utf8");
-
-      this.socket.connect(port, host, () => {
-        this.connected = true;
-        if (pass) {
-          this.socket!.write(`*2\r\n$4\r\nAUTH\r\n$${pass.length}\r\n${pass}\r\n`);
-        }
-        logger.info({ host, port }, "[cache] Redis connected");
-      });
-
-      this.socket.on("data", (chunk: string) => {
-        this.buffer += chunk;
-        this.flushBuffer();
-      });
-
-      this.socket.on("error", (err) => {
-        logger.warn({ err: err.message }, "[cache] Redis socket error — using in-memory cache");
-        this.connected = false;
-        for (const p of this.queue) p.resolve(null);
-        this.queue = [];
-      });
-
-      this.socket.on("close", () => {
-        this.connected = false;
-        logger.warn("[cache] Redis connection closed");
-      });
-    } catch (err) {
-      logger.warn(
-        { err: (err as Error).message },
-        "[cache] Redis connect failed — using in-memory cache"
-      );
+  connect(url: string): Promise<void> {
+    if (this.connectPromise) {
+      return this.connectPromise;
     }
+
+    this.connectPromise = new Promise<void>((resolve, reject) => {
+      try {
+        const parsed = new URL(url);
+        const host = parsed.hostname;
+        const port = parseInt(parsed.port || "6379", 10);
+        const pass = parsed.password || null;
+
+        this.socket = new Socket();
+        this.socket.setEncoding("utf8");
+
+        let settled = false;
+
+        this.socket.connect(port, host, () => {
+          this.connected = true;
+          if (pass) {
+            this.socket!.write(`*2\r\n$4\r\nAUTH\r\n$${pass.length}\r\n${pass}\r\n`);
+          }
+          logger.info({ host, port }, "[cache] Redis connected");
+          if (!settled) {
+            settled = true;
+            resolve();
+          }
+        });
+
+        this.socket.on("data", (chunk: string) => {
+          this.buffer += chunk;
+          this.flushBuffer();
+        });
+
+        this.socket.on("error", (err) => {
+          this.connected = false;
+          for (const p of this.queue) p.resolve(null);
+          this.queue = [];
+          if (!settled) {
+            settled = true;
+            reject(err);
+          } else {
+            logger.warn({ err: err.message }, "[cache] Redis socket error — using in-memory cache");
+          }
+        });
+
+        this.socket.on("close", () => {
+          this.connected = false;
+          logger.warn("[cache] Redis connection closed");
+        });
+      } catch (err) {
+        reject(err as Error);
+      }
+    });
+
+    return this.connectPromise;
   }
 
   private flushBuffer(): void {
@@ -79,8 +96,9 @@ class RedisCacheClient {
       if (first === "+") {
         const end = this.buffer.indexOf("\r\n");
         if (end === -1) break;
+        const val = this.buffer.slice(1, end);
         this.buffer = this.buffer.slice(end + 2);
-        this.queue.shift()!.resolve("OK");
+        this.queue.shift()!.resolve(val);
 
       } else if (first === ":") {
         const end = this.buffer.indexOf("\r\n");
@@ -130,6 +148,12 @@ class RedisCacheClient {
     });
   }
 
+  /** PING — returns "PONG" or status from Redis */
+  async ping(): Promise<string | null> {
+    const cmd = "*1\r\n$4\r\nPING\r\n";
+    return this.send(cmd);
+  }
+
   /** GET key — returns the value or null on miss/error. */
   async get(key: string): Promise<string | null> {
     const cmd = `*2\r\n$3\r\nGET\r\n$${key.length}\r\n${key}\r\n`;
@@ -143,6 +167,17 @@ class RedisCacheClient {
       `*5\r\n$3\r\nSET\r\n$${key.length}\r\n${key}\r\n$${value.length}\r\n${value}\r\n` +
       `$2\r\nEX\r\n$${ttl.length}\r\n${ttl}\r\n`;
     return this.send(cmd);
+  }
+
+  disconnect(): void {
+    if (this.socket) {
+      this.socket.destroy();
+      this.socket = null;
+    }
+    this.connected = false;
+    this.connectPromise = null;
+    this.buffer = "";
+    this.queue = [];
   }
 
   get isConnected(): boolean {
@@ -221,5 +256,43 @@ export const cache = {
     // Fire-and-forget; a failed write should never fail the request.
     void this.set(key, serialised, ttlSeconds).catch(() => undefined);
     return value;
+  },
+
+  /**
+   * Verifies that Redis is reachable and responsive.
+   * If REDIS_URL is set (or required in production), performs connect and PING.
+   * Throws an Error if Redis cannot be reached.
+   */
+  async checkReady(timeoutMs = 5000): Promise<void> {
+    const url = process.env["REDIS_URL"];
+    if (!url) {
+      if (process.env["NODE_ENV"] === "production") {
+        throw new Error("REDIS_URL is required in production");
+      }
+      return;
+    }
+
+    const connectP = redis.connect(url);
+    const timeoutP = new Promise<never>((_, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`Redis connection timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      timer.unref?.();
+    });
+
+    await Promise.race([connectP, timeoutP]);
+
+    const pong = await redis.ping();
+    if (!pong) {
+      throw new Error("Redis ping returned empty response");
+    }
+  },
+
+  disconnect(): void {
+    redis.disconnect();
+  },
+
+  getClient(): RedisCacheClient {
+    return redis;
   },
 };

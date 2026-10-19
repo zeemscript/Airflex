@@ -106,6 +106,20 @@
     "networkError": "Àṣìṣe nẹ́tíwọ́ọ̀kì. Jọ̀wọ́ gbìyànjú lẹ́ẹ̀kan si.",
     "resolveFailed": "Àkúná láti wá orúkọ àkọọ́lẹ̀"
   },
+  "NotFound": {
+    "heading": "Àwárí ojú-ìwé",
+    "body": "Ojú-ìwé tí ó wá kò sí tàbí a ti gbé e. Ṣàyẹ̀wò URL tàbí padà sí ọjà.",
+    "browseListings": "Wo Àwọn Àtòjọ",
+    "sellAsset": "Ta nkan kan",
+    "viewWallet": "Wo wọ́lẹ́ẹ̀tì rẹ",
+    "youMightBeLookingFor": "Ó ṣeéṣe kí o wá fún",
+    "marketplace": "Ọjà",
+    "sellAirtime": "Ta airtime",
+    "createAccount": "Ṣẹ̀dá àkọọ́lẹ̀",
+    "signIn": "Wọlé",
+    "copyright": "© {year} AirFlex. Ìmọ̀ sílẹ̀ lábẹ́ MIT License.",
+    "github": "GitHub"
+  },
   "Trade": {
     "loading": "Ń kó…",
     "expired": "Ó ti parí",

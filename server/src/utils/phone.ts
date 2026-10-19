@@ -51,3 +51,13 @@ export function normalizePhone(phone: string): string {
 
   return trimmed;
 }
+
+/**
+ * Mask a phone number — show country code + last 4 digits only: +234 *** *** 7890
+ */
+export function maskPhone(phone: string): string {
+  if (phone.length < 6) return "***";
+  const visible = phone.slice(-4);
+  const prefix = phone.startsWith("+") ? phone.slice(0, 4) : phone.slice(0, 3);
+  return `${prefix} *** *** ${visible}`;
+}

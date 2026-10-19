@@ -23,7 +23,12 @@ export const requestOtpSchema = z.object({
       "Enter a valid phone number (e.g. +2348012345678 or 08012345678)"
     )
     .transform(normalizePhone),
-  referralCode: z.string().trim().length(8).regex(/^[A-Za-z0-9]+$/).optional(),
+  // 16 characters for codes issued since #263; 8 for codes issued before it.
+  referralCode: z
+    .string()
+    .trim()
+    .regex(/^(?:[A-Za-z0-9]{8}|[A-Za-z0-9]{16})$/)
+    .optional(),
 });
 
 export type RequestOtpInput = z.infer<typeof requestOtpSchema>;

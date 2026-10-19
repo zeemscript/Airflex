@@ -41,6 +41,9 @@ describe("GET /api/v1/profile", () => {
   });
 
   it("returns 200 with profile data and non-empty referralCode", async () => {
+    // 0th query: authenticate's token-revocation check (token_version lookup).
+    mockQuery.mockResolvedValueOnce({ rows: [{ token_version: 1 }] });
+
     // 1st query: users
     mockQuery.mockResolvedValueOnce({
       rows: [
@@ -74,6 +77,10 @@ describe("GET /api/v1/profile", () => {
   });
 
   it("returns 404 when user is not found in database", async () => {
+    // 0th query: authenticate's token-revocation check (token_version lookup).
+    mockQuery.mockResolvedValueOnce({ rows: [{ token_version: 1 }] });
+
+    // 1st query: users (not found)
     mockQuery.mockResolvedValueOnce({ rows: [] });
 
     const res = await request(app)

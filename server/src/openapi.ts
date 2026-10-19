@@ -275,9 +275,16 @@ export const openApiDocument = {
             example: "MTN_AIRTIME",
           },
           amount: {
-            type: "number",
-            exclusiveMinimum: 0,
-            example: 500,
+            type: "integer",
+            minimum: 1,
+            maximum: 1_000_000_000_000,
+            example: 500_000_000,
+            description:
+              "Listing amount **in stroops** (the escrow contract's unit, " +
+              "1 NGN = 1,000,000 stroops). The client converts exactly once " +
+              "with `toStroops()` from `@airflex/shared`; the server validates " +
+              "a positive integer and forwards it to the contract unchanged " +
+              "(issue #292).",
           },
           expiresInHours: {
             type: "integer",
@@ -431,7 +438,7 @@ export const openApiDocument = {
               },
               referralCode: {
                 type: "string",
-                example: "ABC12345",
+                example: "K7QM2XWTHN4PZR8C",
               },
             },
           },
@@ -845,8 +852,9 @@ export const openApiDocument = {
         summary: "Register a new phone number after recovery",
         description:
           "Presents the one-time recovery token from POST /api/v1/auth/recover " +
-          "and moves the account to a new phone number (issue #108). Returns a " +
-          "fresh session JWT so the user is signed in immediately.",
+          "and moves the account to a new phone number. Sends an OTP to the new phone " +
+          "number and prompts the user to verify ownership via POST /api/v1/auth/verify-otp " +
+          "before a session JWT is issued.",
         security: [],
         requestBody: {
           required: true,
@@ -858,10 +866,17 @@ export const openApiDocument = {
         },
         responses: {
           "200": {
-            description: "Phone number updated — session JWT issued.",
+            description: "Phone number updated — verification prompt returned.",
             content: {
               "application/json": {
-                schema: { $ref: "#/components/schemas/AuthTokenResponse" },
+                schema: {
+                  type: "object",
+                  properties: {
+                    message: { type: "string" },
+                    phone: { type: "string" },
+                    requiresVerification: { type: "boolean" },
+                  },
+                },
               },
             },
           },
@@ -956,6 +971,15 @@ export const openApiDocument = {
           "Creates a new trade listing. Calls `create_listing` on the Soroban escrow contract " +
           "and stores the resulting on-chain listing ID.",
         security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: "Idempotency-Key",
+            in: "header",
+            required: false,
+            description: "Optional idempotency key to prevent duplicate listing creation on retry.",
+            schema: { type: "string" },
+          },
+        ],
         requestBody: {
           required: true,
           content: {

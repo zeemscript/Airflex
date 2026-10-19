@@ -106,6 +106,20 @@
     "networkError": "Network error. Please try again.",
     "resolveFailed": "Failed to resolve account name"
   },
+  "NotFound": {
+    "heading": "Page not found",
+    "body": "The page you're looking for doesn't exist or has been moved. Check the URL or head back to the marketplace.",
+    "browseListings": "Browse Listings",
+    "sellAsset": "Sell an asset",
+    "viewWallet": "View your wallet",
+    "youMightBeLookingFor": "You might be looking for",
+    "marketplace": "Marketplace",
+    "sellAirtime": "Sell airtime",
+    "createAccount": "Create account",
+    "signIn": "Sign in",
+    "copyright": "© {year} AirFlex. Open source under the MIT License.",
+    "github": "GitHub"
+  },
   "Trade": {
     "loading": "Loading…",
     "expired": "Expired",
