@@ -266,13 +266,19 @@ export async function getWalletBalance(publicKey: string): Promise<string> {
  * be signed client-side. Here we derive it from the seller's stored secret
  * or a platform hot-wallet for demonstration purposes.
  *
+ * `amountStroops` is passed straight through to the contract: the caller
+ * converts the naira the seller quoted exactly once with `toStroops()` from
+ * packages/shared (issue #292), so no scale factor lives here and a
+ * fractional/ambiguous amount cannot sneak in unnoticed.
+ *
  * @returns The contract listing ID (stringified i128 sequence number)
  */
 export async function createListing(params: {
   sellerPublicKey: string;
   sellerSecretKey: string;
   assetType: string;
-  amount: number;
+  /** Listing amount in stroops (1 NGN = 1,000,000 stroops). */
+  amountStroops: bigint;
   expiresAt: Date;
 }): Promise<string> {
   const contractAddress = ESCROW_CONTRACT_ID;
@@ -288,7 +294,7 @@ export async function createListing(params: {
     span.setAttribute("soroban.function", "create_listing");
     span.setAttribute("soroban.network", process.env["STELLAR_NETWORK"] ?? "testnet");
     span.setAttribute("trade.asset_type", params.assetType);
-    span.setAttribute("trade.amount", params.amount);
+    span.setAttribute("trade.amount_stroops", params.amountStroops.toString());
 
     try {
       const keypair = Keypair.fromSecret(params.sellerSecretKey);
@@ -304,7 +310,7 @@ export async function createListing(params: {
             "create_listing",
             new Address(params.sellerPublicKey).toScVal(),
             nativeToScVal(params.assetType, { type: "symbol" }),
-            nativeToScVal(BigInt(params.amount * 1_000_000), { type: "i128" }),
+            nativeToScVal(params.amountStroops, { type: "i128" }),
             nativeToScVal(
               BigInt(Math.floor(params.expiresAt.getTime() / 1000)),
               { type: "u64" }
@@ -353,13 +359,18 @@ export async function createListing(params: {
  * The returned XDR is already simulated and assembled by
  * `prepareTransaction`, so the client only has to sign it.
  *
+ * `amountStroops` must be the listing amount in stroops. `trade_offers.amount`
+ * is stored in naira (the platform ledger's unit), so the caller converts it
+ * back with `toStroops()` from packages/shared before calling; the deposit then
+ * matches the listing exactly (issue #292).
+ *
  * @returns the unsigned transaction envelope (base64 XDR) plus the network
  *          passphrase the client must sign against
  */
 export async function buildEscrowDepositXdr(params: {
   buyerPublicKey: string;
   listingId: string;
-  amount: number;
+  amountStroops: bigint;
 }): Promise<{ xdr: string; networkPassphrase: string }> {
   const contractAddress = ESCROW_CONTRACT_ID;
   if (!contractAddress) {
@@ -373,7 +384,7 @@ export async function buildEscrowDepositXdr(params: {
     span.setAttribute("soroban.contract_id", contractAddress);
     span.setAttribute("soroban.function", "deposit_to_escrow");
     span.setAttribute("trade.listing_id", params.listingId);
-    span.setAttribute("trade.amount", params.amount);
+    span.setAttribute("trade.amount_stroops", params.amountStroops.toString());
 
     try {
       const account = await horizonServer.loadAccount(params.buyerPublicKey);
@@ -388,7 +399,7 @@ export async function buildEscrowDepositXdr(params: {
             "deposit_to_escrow",
             nativeToScVal(params.listingId, { type: "symbol" }),
             new Address(params.buyerPublicKey).toScVal(),
-            nativeToScVal(BigInt(params.amount * 1_000_000), { type: "i128" })
+            nativeToScVal(params.amountStroops, { type: "i128" })
           )
         )
         // Longer than the server-signed path: the clock is now running while a

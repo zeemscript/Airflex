@@ -6,6 +6,7 @@ type LogMethod = {
 };
 
 const levelColors: Record<string, string> = {
+  FATAL: "\u001b[35m",
   INFO: "\u001b[36m",
   WARN: "\u001b[33m",
   ERROR: "\u001b[31m",
@@ -65,6 +66,7 @@ export const logger = {
   info: createLogMethod("info"),
   warn: createLogMethod("warn"),
   error: createLogMethod("error"),
+  fatal: createLogMethod("fatal"),
   debug: createLogMethod("debug"),
 };
 

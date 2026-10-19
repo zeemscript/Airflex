@@ -106,6 +106,20 @@
     "networkError": "Mperi netwọk. Biko nwaa ọzọ.",
     "resolveFailed": "Enweghị ike ịchọta aha akaụntụ"
   },
+  "NotFound": {
+    "heading": "Ahụbeghị peeji",
+    "body": "Peeji ị na-achọ adịghị ma ọ bụ e bugharịala ya. Nyochaa URL ma ọ bụ laghachi na ahịa.",
+    "browseListings": "Lee Ndepụta",
+    "sellAsset": "Ree ihe",
+    "viewWallet": "Lee obere akpa gị",
+    "youMightBeLookingFor": "Enwere ike na ị na-achọ",
+    "marketplace": "Ahịa",
+    "sellAirtime": "Ree airtime",
+    "createAccount": "Mepụta akaụntụ",
+    "signIn": "Banye",
+    "copyright": "© {year} AirFlex. Mepee isi n'okpuru MIT License.",
+    "github": "GitHub"
+  },
   "Trade": {
     "loading": "Na-ebu…",
     "expired": "Agwụla",

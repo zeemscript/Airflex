@@ -5,20 +5,13 @@ import { authenticate, AuthenticatedRequest } from "../middleware/authenticate";
 import { QueueService } from "../jobs";
 import type { TradeOffer, TradeStatus } from "../types/trade";
 import logger from "../utils/logger";
+import { maskPhone } from "../utils/phone";
 
 const router = Router();
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/** Mask a phone number — show country code + last 4 digits only: +234 *** *** 7890 */
-function maskPhone(phone: string): string {
-  if (phone.length < 6) return "***";
-  const visible = phone.slice(-4);
-  const prefix  = phone.startsWith("+") ? phone.slice(0, 4) : phone.slice(0, 3);
-  return `${prefix} *** *** ${visible}`;
-}
 
 /**
  * One-way SHA-256 hash of a phone number.

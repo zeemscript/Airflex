@@ -8,9 +8,10 @@ import {
   RECOVERY_WINDOW_MINUTES,
 } from "../middleware/rateLimitRecovery";
 import { v4 as uuidv4 } from "uuid";
-import { randomInt } from "crypto";
+import { createHash } from "crypto";
 import jwt from "jsonwebtoken";
 import pool from "../db";
+import { cache } from "../services/cache";
 import { generateAndFundWallet } from "../services/stellar";
 import { validate } from "../middleware/validate";
 import {
@@ -35,8 +36,27 @@ import { generateDisplayHandle } from "../utils/displayHandle";
 
 const router = Router();
 
+/**
+ * Returns the JWT signing secret.
+ *
+ * assertEnvValid() is called at server startup (index.ts) and exits the
+ * process if JWT_SECRET is absent or too short. This getter is a second line
+ * of defence: it throws a descriptive error rather than letting jsonwebtoken
+ * receive `undefined` and throw a cryptic internal exception (issue #247).
+ */
+function getJwtSecret(): string {
+  const secret = process.env["JWT_SECRET"];
+  if (!secret) {
+    throw new Error(
+      "[auth] JWT_SECRET is not set. " +
+        "The server should have exited at startup — check validateEnv.ts."
+    );
+  }
+  return secret;
+}
+
 function newReferralCode(): string {
-  return createReferralCode(() => randomInt(0, 32) / 32);
+  return createReferralCode();
 }
 
 /** Send OTP via Termii SMS API */
@@ -295,7 +315,7 @@ router.post(
     // `tokenVersion` lets this token be revoked before its 7-day expiry via
     // POST /api/v1/auth/revoke (issue: previously there was no revocation
     // mechanism at all).
-    const secret = process.env["JWT_SECRET"]!;
+    const secret = getJwtSecret();
     const token = jwt.sign(
       { sub: user.id, stellarPublicKey, tokenVersion: user.token_version },
       secret,
@@ -371,7 +391,7 @@ router.post(
 
     // One-time token: short TTL, scoped to recovery so it can never be used
     // as a normal session token.
-    const secret = process.env["JWT_SECRET"]!;
+    const secret = getJwtSecret();
     const recoveryToken = jwt.sign(
       { sub: result.userId, scope: "recovery", purpose: "change-phone" },
       secret,
@@ -395,7 +415,7 @@ router.post(
   validate(changePhoneSchema),
   async (req, res) => {
     const { token, newPhone } = req.body as ChangePhoneInput;
-    const secret = process.env["JWT_SECRET"]!;
+    const secret = getJwtSecret();
 
     let payload: { sub?: string; scope?: string };
     try {
@@ -406,6 +426,13 @@ router.post(
     }
 
     if (payload.scope !== "recovery" || !payload.sub) {
+      res.status(401).json({ error: "Recovery token is invalid or expired" });
+      return;
+    }
+
+    const tokenHash = createHash("sha256").update(token).digest("hex");
+    const isRevoked = await cache.get(`revoked_recovery_token:${tokenHash}`);
+    if (isRevoked) {
       res.status(401).json({ error: "Recovery token is invalid or expired" });
       return;
     }
@@ -434,31 +461,26 @@ router.post(
       return;
     }
 
+    // Update phone number and bump token version
     await pool.query(
-      `UPDATE users SET phone = $1, updated_at = NOW() WHERE id = $2`,
+      `UPDATE users SET phone = $1, token_version = token_version + 1, updated_at = NOW() WHERE id = $2`,
       [newPhone, userId]
     );
 
-    // Issue a normal session JWT so the user is signed in immediately.
-    const { rows: keyRows } = await pool.query<{
-      stellar_public_key: string | null;
-      token_version: number;
-    }>(
-      `SELECT stellar_public_key, token_version FROM users WHERE id = $1 LIMIT 1`,
-      [userId]
-    );
-    const stellarPublicKey = keyRows[0]?.stellar_public_key ?? "";
-    const tokenVersion = keyRows[0]?.token_version ?? 1;
+    // Invalidate the recovery token immediately so it cannot be reused
+    await cache.set(`revoked_recovery_token:${tokenHash}`, "1", 15 * 60);
 
     const sessionToken = jwt.sign(
       { sub: userId, stellarPublicKey, tokenVersion },
-      secret,
+      getJwtSecret(),
       { expiresIn: "7d" }
     );
 
+    // Do NOT issue a session JWT yet — the user must complete OTP verification for the new number
     res.status(200).json({
-      token: sessionToken,
-      user: { id: userId, phone: newPhone, stellarPublicKey },
+      message: "Phone number updated. Please verify your new phone number with the OTP sent to complete sign-in.",
+      phone: newPhone,
+      requiresVerification: true,
     });
   }
 );

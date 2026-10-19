@@ -1,6 +1,8 @@
 import { Router, type Response } from "express";
 import { v4 as uuidv4 } from "uuid";
+import { asStroops, fromStroops, toStroops } from "@airflex/shared/units";
 import pool from "../db";
+import { cache } from "../services/cache";
 import { authenticate, optionalAuthenticate, AuthenticatedRequest } from "../middleware/authenticate";
 import { validate } from "../middleware/validate";
 import {
@@ -146,6 +148,23 @@ router.post(
     const { assetType, amount, expiresInHours } = req.body as CreateTradeInput;
     const { sub: sellerId, stellarPublicKey } = (req as unknown as AuthenticatedRequest).user;
 
+    const rawIdempotencyKey = req.header("idempotency-key");
+    const idempotencyKey = rawIdempotencyKey ? rawIdempotencyKey.trim() : null;
+    const cacheKey = idempotencyKey ? `idempotency:trades:${sellerId}:${idempotencyKey}` : null;
+
+    if (cacheKey) {
+      const cached = await cache.get(cacheKey);
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached) as { status: number; body: unknown };
+          res.status(parsed.status).json(parsed.body);
+          return;
+        } catch {
+          // If parse fails, ignore corrupt cache entry and proceed
+        }
+      }
+    }
+
     // KYC gate: a seller must be verified before they can list a trade. This
     // is checked here rather than only relying on the frontend, since the
     // frontend check can be bypassed by calling the API directly.
@@ -185,26 +204,47 @@ router.post(
       Date.now() + expiresInHours * 60 * 60 * 1000
     );
 
+    // `amount` arrived already in stroops: createTradeSchema validated it as a
+    // positive integer and the client converted exactly once with toStroops()
+    // (issue #292). It is forwarded to the contract unchanged — there is no
+    // `* 1_000_000` here — so the contract and the seller agree exactly.
+    const amountStroops = asStroops(amount);
+
     // Call Soroban create_listing — may throw if contract call fails
     const contractListingId = await createListing({
       sellerPublicKey: stellarPublicKey,
       sellerSecretKey: walletRows[0].stellar_secret_key,
       assetType,
-      amount,
+      amountStroops,
       expiresAt,
     });
 
     const tradeId = uuidv4();
 
+    // The platform ledger (`trade_offers`, wallets, `transactions`) is
+    // denominated in naira, so the amount the seller quoted in naira is what is
+    // stored; only the wire body and the escrow call speak stroops.
+    const nairaAmount = fromStroops(amountStroops);
     const { rows } = await pool.query<TradeOffer>(
       `INSERT INTO trade_offers
          (id, seller_id, asset_type, amount, status, contract_listing_id, expires_at)
        VALUES ($1, $2, $3, $4, 'Active', $5, $6)
        RETURNING *`,
-      [tradeId, sellerId, assetType, amount, contractListingId, expiresAt]
+      [tradeId, sellerId, assetType, nairaAmount, contractListingId, expiresAt]
     );
 
-    res.status(201).json({ data: rows[0] });
+    const responseBody = { data: rows[0] };
+
+    if (cacheKey) {
+      // 24-hour TTL for idempotency key response
+      await cache.set(
+        cacheKey,
+        JSON.stringify({ status: 201, body: responseBody }),
+        24 * 60 * 60
+      );
+    }
+
+    res.status(201).json(responseBody);
   }
 );
 
@@ -334,7 +374,11 @@ router.post(
     const { xdr: unsignedXdr, networkPassphrase } = await buildEscrowDepositXdr({
       buyerPublicKey: stellarPublicKey,
       listingId: trade.contract_listing_id!,
-      amount: trade.amount,
+      // The deposit must match the listing exactly. `trade_offers.amount` is
+      // stored in naira (the platform ledger's unit), so it is converted back
+      // to stroops with the same shared helper the seller used (issue #292):
+      // one explicit conversion, never a literal `* 1_000_000`.
+      amountStroops: toStroops(Number(trade.amount)),
     });
 
     res.status(200).json({

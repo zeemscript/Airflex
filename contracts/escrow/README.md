@@ -36,7 +36,9 @@ Called by the buyer to lock funds in the contract. Sets trade status to `Locked`
 Refunds the buyer. Can be called by the buyer after the timelock expires, or by admin.
 
 ### `flag_dispute(trade_id)`
-Escalates a trade to `Disputed` status for manual admin resolution.
+Escalates a trade to `Disputed` status for manual admin resolution. Only `Locked`
+(fully filled) trades can be disputed; `PartiallyFilled` and `Open` trades return
+`WrongStatus`.
 
 ### `get_trade(trade_id) → TradeOffer`
 Read-only view of a specific trade.

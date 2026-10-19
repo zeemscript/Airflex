@@ -130,6 +130,12 @@ fn topic_unpaused() -> Symbol {
 fn topic_updated() -> Symbol {
     symbol_short!("updated")
 } // 7 chars
+fn topic_admin() -> Symbol {
+    symbol_short!("admin")
+} // 5 chars
+fn topic_transfer() -> Symbol {
+    symbol_short!("transfer")
+} // 8 chars
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -249,6 +255,20 @@ impl MarketplaceContract {
 
         env.events()
             .publish((topic_contract(), topic_unpaused()), ());
+        Ok(())
+    }
+
+    /// Transfers admin ownership to a new address.
+    /// Only callable by the current admin.
+    /// Emits a `topics: ["admin", "transfer"]` event with `(old_admin, new_admin)`.
+    pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), ContractError> {
+        let admin = get_admin(&env)?;
+        admin.require_auth();
+
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+
+        env.events()
+            .publish((topic_admin(), topic_transfer()), (admin, new_admin));
         Ok(())
     }
 
@@ -441,6 +461,10 @@ impl MarketplaceContract {
 
         if listing.status != ListingStatus::Sold {
             return Err(ContractError::WrongStatus);
+        }
+
+        if listing.buyer.as_ref() != Some(&buyer) {
+            return Err(ContractError::Unauthorized);
         }
 
         let token_client = token::Client::new(&env, &listing.token);
@@ -1177,6 +1201,8 @@ mod test {
             "contract",
             "paused",
             "unpaused",
+            "admin",
+            "transfer",
         ];
 
         for topic in SHORT_TOPICS {
@@ -1193,6 +1219,8 @@ mod test {
         let _ = topic_contract();
         let _ = topic_paused();
         let _ = topic_unpaused();
+        let _ = topic_admin();
+        let _ = topic_transfer();
 
         // Verify that longer/new topics (> 9 chars, e.g. "emergency_withdrawal") work with Symbol::new(&env, ...)
         let long_topic = Symbol::new(&env, "emergency_withdrawal");
@@ -1340,5 +1368,55 @@ mod test {
         // Not paused
         let result = client.try_emergency_withdraw(&token, &buyer, &500_0000000i128);
         assert_eq!(result, Err(Ok(ContractError::WrongStatus)));
+    }
+
+    #[test]
+    fn test_cancel_and_refund_wrong_buyer_rejected() {
+        let (env, client, _admin, seller, buyer, token) = setup();
+        env.ledger().with_mut(|l| l.timestamp = 1_000_000);
+
+        let listing_id = client.create_listing(
+            &seller,
+            &token,
+            &500_0000000i128,
+            &AssetCategory::Data,
+            &symbol_short!("AIRTEL"),
+            &500i128,
+            &(1_000_000 + 86_400),
+        );
+
+        client.deposit_to_escrow(&buyer, &listing_id);
+
+        let wrong_buyer = Address::generate(&env);
+        let result = client.try_cancel_and_refund(&wrong_buyer, &listing_id);
+        assert_eq!(result, Err(Ok(ContractError::Unauthorized)));
+
+        // Correct buyer succeeds
+        let success = client.try_cancel_and_refund(&buyer, &listing_id);
+        assert!(success.is_ok());
+    }
+
+    #[test]
+    fn test_transfer_admin_authorized_and_functional() {
+        let (env, client, admin, _seller, _buyer, _token) = setup();
+        assert_eq!(client.get_admin(), admin);
+
+        let new_admin = Address::generate(&env);
+        client.transfer_admin(&new_admin);
+        assert_eq!(client.get_admin(), new_admin);
+
+        // Verify new admin can perform admin-only operation (pause)
+        client.pause();
+        assert!(client.is_paused());
+    }
+
+    #[test]
+    #[should_panic(expected = "HostError: Error(Auth, InvalidAction)")]
+    fn test_err_transfer_admin_unauthorized() {
+        let (env, client, _admin, _seller, _buyer, _token) = setup();
+        let new_admin = Address::generate(&env);
+
+        env.set_auths(&[]);
+        client.transfer_admin(&new_admin);
     }
 }

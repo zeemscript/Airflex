@@ -4,7 +4,23 @@ import { useState, useEffect, type FormEvent, type ChangeEvent } from "react";
 import { getToken, isAuthenticated } from "../lib/auth";
 import type { TradeOffer } from "../../../server/src/types/trade";
 import { CurrencyInput } from "../../components/CurrencyInput";
-import { ASSET_OPTIONS } from "../lib/assetTypes";
+import { toStroops } from "@airflex/shared/units";
+import { getCachedConversionRate, setCachedConversionRate } from "./ratesCache";
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const ASSET_OPTIONS = [
+  { value: "MTN_AIRTIME",     label: "MTN — Airtime" },
+  { value: "MTN_DATA",        label: "MTN — Data" },
+  { value: "GLO_AIRTIME",     label: "Glo — Airtime" },
+  { value: "GLO_DATA",        label: "Glo — Data" },
+  { value: "AIRTEL_AIRTIME",  label: "Airtel — Airtime" },
+  { value: "AIRTEL_DATA",     label: "Airtel — Data" },
+  { value: "9MOBILE_AIRTIME", label: "9mobile — Airtime" },
+  { value: "9MOBILE_DATA",    label: "9mobile — Data" },
+] as const;
 
 const EXPIRY_OPTIONS = [
   { value: 1,   label: "1 hour" },
@@ -323,8 +339,12 @@ export default function SellPage() {
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
-          assetType:      fields.assetType,
-          amount:         parseFloat(fields.amount),
+          assetType: fields.assetType,
+          // The API speaks the escrow contract's unit: the naira the seller
+          // typed is converted to stroops exactly once, here, with the shared
+          // helper (issue #292). `Number(...)` is what JSON can carry — the
+          // value is a safe integer well under 2^53 (capped at ₦1,000,000).
+          amount: Number(toStroops(parseFloat(fields.amount))),
           expiresInHours: fields.expiresInHours,
         }),
       });

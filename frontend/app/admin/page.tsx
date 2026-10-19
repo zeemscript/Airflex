@@ -5,24 +5,23 @@
  *
  * # On the client-side role check
  *
- * The `role !== "admin"` guard below renders a 403 instead of the dashboard.
- * That is a **UX affordance, not a security control** — the JWT lives in the
- * browser and its payload is readable and editable by whoever holds it, so a
- * determined user can always make this component render.
+ * The dashboard is wrapped in `<AuthGuard role="admin">`, which redirects a
+ * non-admin to `/`. That is a **UX affordance, not a security control** — the
+ * JWT lives in the browser and its payload is readable and editable by whoever
+ * holds it, so a determined user can always make this component render.
  *
  * What actually protects the data is that every endpoint behind it runs
- * `authenticate` + `requireAdmin` server-side. A forged client-side role gets
- * a dashboard full of 403s and no data. The check here exists so a normal
- * non-admin sees a clear message rather than a broken page.
+ * `authenticate` + `requireAdmin` server-side, and the Next.js middleware
+ * rejects a non-admin session at the edge. A forged client-side role gets a
+ * dashboard full of 403s and no data. The guard here exists so a normal
+ * non-admin is bounced cleanly rather than shown a broken page.
  */
 
 import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "../hooks/useAuth";
 import { ApiError, apiFetch } from "../../lib/apiFetch";
 import { Button } from "../../components/ui/Button";
-import { Badge } from "../../components/ui/Badge";
 import { Card } from "../../components/ui/Card";
-import { Spinner } from "../../components/ui/Spinner";
 import { Modal } from "../../components/ui/Modal";
 import { StellarExplorerLink } from "../../components/StellarExplorerLink";
 
@@ -65,7 +64,7 @@ interface FlaggedAccount {
 type Resolution = "release_to_seller" | "refund_to_buyer";
 
 export default function AdminDashboardPage(): JSX.Element {
-  const { user, token, isLoading } = useAuth();
+  const { token } = useAuth();
 
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [disputed, setDisputed] = useState<DisputedTrade[]>([]);
@@ -173,27 +172,9 @@ export default function AdminDashboardPage(): JSX.Element {
     }
   }
 
-  if (isLoading) {
-    return (
-      <main className="flex justify-center p-16">
-        <Spinner size="lg" label="Loading admin dashboard…" />
-      </main>
-    );
-  }
-
-  if (!user || user.role !== "admin") {
-    return (
-      <main className="flex min-h-[60vh] flex-col items-center justify-center gap-3 p-10 text-center">
-        <h1 className="text-2xl font-bold text-white">403 — Forbidden</h1>
-        <p className="max-w-sm text-sm text-zinc-400">
-          This area is restricted to administrator accounts.
-        </p>
-      </main>
-    );
-  }
-
   return (
-    <main className="mx-auto max-w-6xl px-4 py-10">
+    <AuthGuard role="admin">
+      <main className="mx-auto max-w-6xl px-4 py-10">
       <header className="mb-8">
         <h1 className="text-3xl font-bold text-white">Admin Dashboard</h1>
         <p className="mt-1 text-sm text-zinc-400">
@@ -469,6 +450,7 @@ export default function AdminDashboardPage(): JSX.Element {
           </div>
         </div>
       )}
-    </main>
+      </main>
+    </AuthGuard>
   );
 }
