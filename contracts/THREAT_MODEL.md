@@ -52,7 +52,17 @@ This document outlines the threat modeling analysis for AirFlex Soroban smart co
 
 ---
 
-### 6. Critical Contract Bug or Settlement Deadlock (Trapped Funds Escape Hatch)
+---
+
+### 7. Secret Key Transmitted in Trade Request Body (Resolved — Issue #245)
+* **Threat Vector**: The original `POST /api/v1/trades/:id/buy` endpoint accepted a `buyerSecretKey` field in the JSON body and forwarded it to `depositToEscrow`. The key appeared in access logs, was visible to any process with HTTP-body access, and gave the server full, unaudited control over the buyer's funds.
+* **Impact**: Critical — Full compromise of every buyer's Stellar wallet from a single log-file leak. Any platform operator with log access could drain all buyer accounts.
+* **Mitigation (implemented)**:
+  * `buyerSecretKey` is removed from the request schema entirely. The Zod schema (`buyTradeSchema`) now accepts only `{ signedXdr: string }` — the server never receives secret key material in a trade request.
+  * Transaction signing is moved client-side. The `/buy/prepare` endpoint returns an unsigned XDR envelope; the browser signs it in memory (using the short-lived key from `/wallet/unlock`); only the signed envelope is submitted.
+  * The server calls `submitSignedTransaction({ signedXdr, expectedSourceAccount })`, which verifies the envelope's source account before submission — it cannot be replayed for a different buyer.
+  * See [docs/security.md](../../docs/security.md#stellar-key-handling--client-side-signing-model) for the full model description.
+
 * **Threat Vector**: A zero-day defect or irrecoverable logic deadlock permanently breaks settlement workflows (`release_payment`, `cancel_and_refund`, `resolve_dispute`), locking protocol assets permanently inside contract balances with no standard path for user withdrawal.
 * **Impact**: Critical — Permanent loss of trapped protocol liquidity and user deposits.
 * **Mitigation**:

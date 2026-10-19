@@ -1,7 +1,9 @@
 import { Router } from "express";
+import { randomUUID } from "crypto";
 import pool from "../db";
 import { authenticate, AuthenticatedRequest } from "../middleware/authenticate";
 import { decryptSecret, getWalletBalance } from "../services/stellar";
+import { QueueService } from "../jobs";
 import { NotificationService } from "../services/notifications";
 
 // ---------------------------------------------------------------------------
@@ -251,171 +253,132 @@ router.get(
 );
 
 // ---------------------------------------------------------------------------
-// POST /api/v1/wallet/withdraw  (authenticated)
+// POST /api/v1/wallet/withdraw  (authenticated) — issue #246
 // ---------------------------------------------------------------------------
 
 /**
- * Submits a withdrawal request to a Nigerian bank account.
- * Body: { amount, bank_code, account_number, account_name }
+ * Accepts a withdrawal request, validates the fiat balance, persists the
+ * record, deducts the balance atomically, and enqueues a background job that
+ * calls the Paystack Transfer API.
+ *
+ * Returns 202 Accepted immediately — the Paystack API call and final status
+ * transitions happen asynchronously via the `process-withdrawal` processor
+ * and the `transfer.success` / `transfer.failed` webhook events.
+ *
+ * Body: { amount: number, bank_code: string, account_number: string, account_name: string }
+ *
+ * Response 202:
+ *   { withdrawalId: string, reference: string, status: "pending" }
  */
 router.post(
   "/withdraw",
   authenticate,
   async (req, res) => {
     const { sub: userId } = (req as AuthenticatedRequest).user;
-    const { amount, bank_code, account_number, account_name } = req.body;
+    const { amount, bank_code, account_number, account_name } = req.body as {
+      amount: unknown;
+      bank_code: unknown;
+      account_number: unknown;
+      account_name: unknown;
+    };
 
-    // Validate input
+    // ---- input validation ------------------------------------------------
     if (!amount || !bank_code || !account_number || !account_name) {
-      res.status(400).json({ error: "All fields are required: amount, bank_code, account_number, account_name" });
+      res.status(400).json({
+        error: "All fields are required: amount, bank_code, account_number, account_name",
+      });
       return;
     }
 
-    const amountNum = parseFloat(amount);
+    const amountNum = parseFloat(String(amount));
     if (isNaN(amountNum) || amountNum <= 0) {
-      res.status(400).json({ error: "Invalid amount" });
+      res.status(400).json({ error: "amount must be a positive number" });
       return;
     }
 
-    // Get user's wallet and current balance
-    const { rows } = await pool.query<{ stellar_public_key: string }>(
-      `SELECT stellar_public_key FROM wallets WHERE user_id = $1 LIMIT 1`,
-      [userId]
-    );
-
-    if (!rows.length || !rows[0]?.stellar_public_key) {
-      res.status(404).json({ error: "Wallet not found" });
+    if (typeof bank_code !== "string" || bank_code.trim() === "") {
+      res.status(400).json({ error: "Invalid bank_code" });
       return;
     }
 
-    const publicKey = rows[0].stellar_public_key;
+    if (
+      typeof account_number !== "string" ||
+      !/^\d{10}$/.test(account_number.trim())
+    ) {
+      res.status(400).json({ error: "account_number must be a 10-digit string" });
+      return;
+    }
 
-    let currentBalance: string;
+    if (typeof account_name !== "string" || account_name.trim() === "") {
+      res.status(400).json({ error: "Invalid account_name" });
+      return;
+    }
+
+    const client = await pool.connect();
     try {
-      currentBalance = await getWalletBalance(publicKey);
-    } catch (err) {
-      console.error("[wallet] Failed to fetch balance for withdrawal:", (err as Error).message);
-      res.status(502).json({ error: "Unable to fetch current balance. Try again." });
-      return;
-    }
+      await client.query("BEGIN");
 
-    const currentBalanceNum = parseFloat(currentBalance);
-    if (amountNum > currentBalanceNum) {
-      res.status(400).json({ error: "Insufficient balance" });
-      return;
-    }
-
-    const paystackSecretKey = process.env["PAYSTACK_SECRET_KEY"];
-    if (!paystackSecretKey) {
-      res.status(500).json({ error: "Payment service not configured" });
-      return;
-    }
-
-    // Step 1: Create a transfer recipient on Paystack
-    let recipientCode: string;
-    try {
-      const recipientRes = await fetch("https://api.paystack.co/transferrecipient", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${paystackSecretKey}`,
-        },
-        body: JSON.stringify({
-          type: "nuban",
-          name: account_name,
-          account_number,
-          bank_code,
-          currency: "NGN",
-        }),
-      });
-
-      const recipientData = (await recipientRes.json()) as {
-        status: boolean;
-        data?: { recipient_code: string };
-        message?: string;
-      };
-
-      if (!recipientRes.ok || !recipientData.status || !recipientData.data?.recipient_code) {
-        console.error("[wallet] Paystack recipient creation failed:", recipientData.message);
-        res.status(502).json({ error: "Unable to register withdrawal account. Check account details." });
-        return;
-      }
-
-      recipientCode = recipientData.data.recipient_code;
-    } catch (err) {
-      console.error("[wallet] Paystack recipient error:", (err as Error).message);
-      res.status(502).json({ error: "Payment service unavailable. Try again." });
-      return;
-    }
-
-    // Step 2: Initiate the Paystack transfer (amount in kobo)
-    const amountKobo = Math.round(amountNum * 100);
-    let transferReference: string;
-    try {
-      const transferRes = await fetch("https://api.paystack.co/transfer", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${paystackSecretKey}`,
-        },
-        body: JSON.stringify({
-          source: "balance",
-          amount: amountKobo,
-          recipient: recipientCode,
-          reason: `AirFlex withdrawal for user ${userId}`,
-          reference: `airflex-withdrawal-${userId}-${Date.now()}`,
-        }),
-      });
-
-      const transferData = (await transferRes.json()) as {
-        status: boolean;
-        data?: { reference: string; transfer_code: string; status: string };
-        message?: string;
-      };
-
-      if (!transferRes.ok || !transferData.status || !transferData.data) {
-        console.error("[wallet] Paystack transfer initiation failed:", transferData.message);
-        res.status(502).json({ error: "Withdrawal failed. Please try again." });
-        return;
-      }
-
-      transferReference = transferData.data.reference;
-    } catch (err) {
-      console.error("[wallet] Paystack transfer error:", (err as Error).message);
-      res.status(502).json({ error: "Payment service unavailable. Try again." });
-      return;
-    }
-
-    // Step 3: Record the debit transaction in the DB
-    try {
-      await pool.query(
-        `INSERT INTO transactions (user_id, amount, direction, type, external_reference)
-         VALUES ($1, $2, 'debit', 'withdrawal', $3)`,
-        [userId, amountNum, transferReference]
+      // ---- check fiat balance (row-lock the wallet row) -------------------
+      const { rows: walletRows } = await client.query<{ fiat_balance: string }>(
+        `SELECT fiat_balance FROM wallets WHERE user_id = $1 LIMIT 1 FOR UPDATE`,
+        [userId]
       );
 
-      // Deduct from fiat_balance
-      await pool.query(
-        `UPDATE wallets SET fiat_balance = GREATEST(0, fiat_balance - $1) WHERE user_id = $2`,
+      if (!walletRows.length) {
+        await client.query("ROLLBACK");
+        res.status(404).json({ error: "Wallet not found" });
+        return;
+      }
+
+      const fiatBalance = parseFloat(walletRows[0]!.fiat_balance);
+      if (amountNum > fiatBalance) {
+        await client.query("ROLLBACK");
+        res.status(400).json({ error: "Insufficient fiat balance" });
+        return;
+      }
+
+      // ---- create withdrawal record in `pending` state --------------------
+      const reference = `airflex-wd-${randomUUID()}`;
+      const { rows: wdRows } = await client.query<{ id: string }>(
+        `INSERT INTO withdrawals
+           (user_id, amount, bank_code, account_number, account_name, reference, status)
+         VALUES ($1, $2, $3, $4, $5, $6, 'pending')
+         RETURNING id`,
+        [userId, amountNum, bank_code.trim(), account_number.trim(), account_name.trim(), reference]
+      );
+      const withdrawalId = wdRows[0]!.id;
+
+      // ---- deduct fiat balance atomically ---------------------------------
+      await client.query(
+        `UPDATE wallets
+         SET fiat_balance = fiat_balance - $1
+         WHERE user_id = $2`,
         [amountNum, userId]
       );
-    } catch (dbErr) {
-      // Log but don't fail — the transfer is already initiated on Paystack
-      console.error("[wallet] Failed to record withdrawal transaction:", (dbErr as Error).message);
+
+      await client.query("COMMIT");
+
+      // ---- enqueue background job (outside the transaction) ---------------
+      await QueueService.enqueue("process-withdrawal", { withdrawalId });
+
+      console.info(
+        `[wallet] Withdrawal queued: id=${withdrawalId} user=${userId} amount=${amountNum} ref=${reference}`
+      );
+
+      res.status(202).json({
+        withdrawalId,
+        reference,
+        status: "pending",
+        message:
+          "Withdrawal request accepted. Funds will arrive within 1–2 business days.",
+      });
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      console.error("[wallet] Withdraw error:", (err as Error).message);
+      res.status(500).json({ error: "Withdrawal request failed. Please try again." });
+    } finally {
+      client.release();
     }
-
-    // Notify the user (best-effort)
-    void NotificationService.send(userId, "WITHDRAWAL_PROCESSED", {
-      amount: amountNum,
-    });
-
-    console.info(`[wallet] Withdrawal initiated: user=${userId} amount=${amountNum} ref=${transferReference}`);
-
-    res.status(200).json({
-      success: true,
-      reference: transferReference,
-      message: "Withdrawal initiated successfully. Funds will arrive within 1–2 business days.",
-    });
   }
 );
 

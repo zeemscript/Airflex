@@ -13,6 +13,7 @@ import { errorHandler } from "./middleware/errorHandler";
 import { apiVersion } from "./middleware/apiVersion";
 import { requestId } from "./middleware/requestId";
 import { pool, query } from "./db/pool";
+import { cache } from "./services/cache";
 
 import { assertEnvValid } from "./config/validateEnv";
 
@@ -44,6 +45,26 @@ if (!isTest) {
           "Verify DATABASE_URL is correct and PostgreSQL is reachable.\n" +
           "Server exiting."
       );
+      process.exit(1);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Redis connection test on startup
+// ---------------------------------------------------------------------------
+
+if (!isTest && (process.env["NODE_ENV"] === "production" || process.env["REDIS_URL"])) {
+  cache
+    .checkReady()
+    .then(() => {
+      logger.info("[cache] Redis connection validated at startup");
+    })
+    .catch((err) => {
+      logger.fatal(
+        `[startup] FATAL: Redis is unavailable at startup: ${(err as Error).message}\n` +
+          "Verify REDIS_URL is reachable. Server exiting."
+      );
+      console.error(`[FATAL] Redis is unavailable at startup: ${(err as Error).message}`);
       process.exit(1);
     });
 }

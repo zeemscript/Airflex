@@ -106,6 +106,20 @@
     "networkError": "Kuskuren hanyar sadarwa. Don Allah sake gwadawa.",
     "resolveFailed": "An kasa neman sunan asusu"
   },
+  "NotFound": {
+    "heading": "Ba a sami shafin ba",
+    "body": "Shafin da kake nema baya nan ko an canza shi. Duba URL ko koma kasuwa.",
+    "browseListings": "Duba Lissafi",
+    "sellAsset": "Sayar da abu",
+    "viewWallet": "Duba jakar hannu ɗinka",
+    "youMightBeLookingFor": "Wataƙila kana neman",
+    "marketplace": "Kasuwa",
+    "sellAirtime": "Sayar da airtime",
+    "createAccount": "Ƙirƙiri asusu",
+    "signIn": "Shiga",
+    "copyright": "© {year} AirFlex. Bude tushe a ƙarƙashin MIT License.",
+    "github": "GitHub"
+  },
   "Trade": {
     "loading": "Ana ɗauka…",
     "expired": "Ya ƙare",

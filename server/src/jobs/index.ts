@@ -12,6 +12,7 @@ import { sendNotificationProcessor }      from "./processors/send-notification";
 import { verifyTradeDeliveryProcessor }   from "./processors/verify-trade-delivery";
 import { processPaystackWebhookProcessor } from "./processors/process-paystack-webhook";
 import { refundCancelledTradeProcessor }  from "./processors/refund-cancelled-trade";
+import { processWithdrawalProcessor }     from "./processors/process-withdrawal";
 
 /** Initialise the queue service and register all processors. */
 export function initJobQueue(): void {
@@ -19,19 +20,21 @@ export function initJobQueue(): void {
   QueueService.init();
 
   // Register typed processors
-  QueueService.register("fund-stellar-account",   fundStellarAccountProcessor);
+  QueueService.register("fund-stellar-account",    fundStellarAccountProcessor);
   QueueService.register("create-virtual-account",  createVirtualAccountProcessor);
   QueueService.register("send-notification",       sendNotificationProcessor);
   QueueService.register("verify-trade-delivery",   verifyTradeDeliveryProcessor);
   QueueService.register("process-paystack-webhook", processPaystackWebhookProcessor);
-  QueueService.register("refund-cancelled-trade",   refundCancelledTradeProcessor);
+  QueueService.register("refund-cancelled-trade",  refundCancelledTradeProcessor);
+  QueueService.register("process-withdrawal",      processWithdrawalProcessor);
 }
 
 // Re-export queue primitives so route/service files only import from here
 export { QueueService } from "./queue";
 export type { QueueName, Job } from "./queue";
-export type { FundStellarAccountData }   from "./processors/fund-stellar-account";
-export type { CreateVirtualAccountData } from "./processors/create-virtual-account";
-export type { SendNotificationData }     from "./processors/send-notification";
-export type { VerifyTradeDeliveryData }  from "./processors/verify-trade-delivery";
-export type { RefundCancelledTradeData } from "./processors/refund-cancelled-trade";
+export type { FundStellarAccountData }    from "./processors/fund-stellar-account";
+export type { CreateVirtualAccountData }  from "./processors/create-virtual-account";
+export type { SendNotificationData }      from "./processors/send-notification";
+export type { VerifyTradeDeliveryData }   from "./processors/verify-trade-delivery";
+export type { RefundCancelledTradeData }  from "./processors/refund-cancelled-trade";
+export type { ProcessWithdrawalData }     from "./processors/process-withdrawal";
