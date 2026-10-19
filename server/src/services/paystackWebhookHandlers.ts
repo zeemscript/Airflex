@@ -1,6 +1,10 @@
 import { pool } from "../db/pool";
 import { maskAccountNumber } from "./virtualAccount";
 import { WalletService } from "./wallet";
+import {
+  applyTransferSuccess,
+  applyTransferFailed,
+} from "../jobs/processors/process-withdrawal";
 
 /** Paystack amounts are in the smallest currency unit (kobo for NGN). */
 const KOBO_PER_NAIRA = 100;
@@ -179,5 +183,42 @@ export async function applyDVAAssigned(
     throw err;
   } finally {
     client.release();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Transfer webhook handlers (issue #246)
+// ---------------------------------------------------------------------------
+
+/**
+ * Dispatches `transfer.success`, `transfer.failed`, and `transfer.reversed`
+ * Paystack events to the withdrawal processor so the withdrawals table is
+ * kept in sync without the route handler polling Paystack.
+ *
+ * Called from the process-paystack-webhook job processor.
+ */
+export async function applyTransferEvent(
+  event: PaystackWebhookEvent
+): Promise<void> {
+  const reference = event.data.reference;
+
+  switch (event.event) {
+    case "transfer.success":
+      await applyTransferSuccess(reference);
+      break;
+
+    case "transfer.failed":
+    case "transfer.reversed":
+      await applyTransferFailed(
+        reference,
+        // Paystack doesn't always include a reason field; use the event type
+        // as a fallback so the failure_reason column is never left blank.
+        (event.data as unknown as { reason?: string }).reason ?? event.event
+      );
+      break;
+
+    default:
+      // Not a transfer event — caller handles routing
+      break;
   }
 }

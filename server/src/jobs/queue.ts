@@ -47,6 +47,7 @@ export const JOB_QUEUES = [
   "verify-trade-delivery",
   "process-paystack-webhook",
   "refund-cancelled-trade",
+  "process-withdrawal",       // issue #246: async Paystack transfer initiation
 ] as const;
 
 export type QueueName = (typeof JOB_QUEUES)[number];

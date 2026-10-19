@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto';
 import type { PoolClient } from 'pg';
 import pool from '../db';
 import { WalletService } from './wallet';
@@ -5,9 +6,31 @@ import { WalletService } from './wallet';
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const DEFAULT_REWARD = 50;
 
-export function createReferralCode(random = Math.random): string {
+/** Bytes of entropy per code: 10 bytes = 80 bits, which base32-encodes to exactly 16 characters. */
+export const REFERRAL_CODE_BYTES = 10;
+export const REFERRAL_CODE_LENGTH = (REFERRAL_CODE_BYTES * 8) / 5;
+
+/**
+ * Generates a referral code from `crypto.randomBytes`, base32-encoded with an
+ * alphabet that drops the look-alike characters I, O, 0 and 1.
+ *
+ * Each character carries exactly 5 bits, so no entropy is lost to modulo bias
+ * or float rounding (the old `randomInt(0, 32) / 32` mapping went through a
+ * float and gave only 40 bits across 8 characters).
+ */
+export function createReferralCode(random: (size: number) => Buffer = randomBytes): string {
+  const bytes = random(REFERRAL_CODE_BYTES);
   let code = '';
-  for (let index = 0; index < 8; index += 1) code += ALPHABET[Math.floor(random() * ALPHABET.length)];
+  let buffer = 0;
+  let bits = 0;
+  for (const byte of bytes) {
+    buffer = (buffer << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      bits -= 5;
+      code += ALPHABET[(buffer >> bits) & 31];
+    }
+  }
   return code;
 }
 

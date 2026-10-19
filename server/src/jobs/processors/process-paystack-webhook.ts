@@ -6,6 +6,7 @@ import type { Job } from "../queue";
 import {
   applyChargeSuccess,
   applyDVAAssigned,
+  applyTransferEvent,
   type PaystackWebhookEvent,
 } from "../../services/paystackWebhookHandlers";
 
@@ -55,6 +56,12 @@ export async function processPaystackWebhookProcessor(
       await applyChargeSuccess(event);
     } else if (event.event === "dedicatedaccount.assign.success") {
       await applyDVAAssigned(event);
+    } else if (
+      event.event === "transfer.success" ||
+      event.event === "transfer.failed" ||
+      event.event === "transfer.reversed"
+    ) {
+      await applyTransferEvent(event);
     }
 
     await markWebhookStatus(webhookEventId, "processed");

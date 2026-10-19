@@ -7,6 +7,12 @@
  */
 import logger from "../utils/logger";
 
+// JWT_SECRET must be at least 32 characters so it provides ≥256-bit effective
+// entropy when used as an HMAC-SHA256 secret.  A shorter secret allows
+// offline brute-forcing of tokens — this is an independent check on top of
+// the "present" check so the error message is actionable (issue #247).
+const JWT_SECRET_MIN_LEN = 32;
+
 /**
  * Variables that MUST be provided for the server to operate safely.
  * The server will refuse to start if any of these are missing.
@@ -34,6 +40,11 @@ export const OPTIONAL_ENV_VARS = [
   "MAX_TRADES_PER_HOUR",
   "MAX_DEPOSITS_PER_DAY",
   "MAX_WITHDRAWALS_PER_DAY",
+  // Storage — required in production when STORAGE_PROVIDER=s3 (default)
+  "STORAGE_PROVIDER",
+  "S3_BUCKET",
+  "S3_REGION",
+  "S3_ENDPOINT",
 ] as const;
 
 export interface EnvValidationResult {
@@ -63,6 +74,18 @@ export function validateEnv(
     );
   }
 
+  // JWT_SECRET quality check — must be long enough to resist offline brute-force
+  // (issue #247).  Only run when the secret is present (missing case is already
+  // covered by the missingRequired check above).
+  const jwtSecret = env["JWT_SECRET"];
+  if (jwtSecret && jwtSecret.length < JWT_SECRET_MIN_LEN) {
+    errors.push(
+      `[startup] JWT_SECRET is too short (${jwtSecret.length} chars). ` +
+        `It must be at least ${JWT_SECRET_MIN_LEN} characters to provide adequate security. ` +
+        `Generate one with: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
+    );
+  }
+
   const encryptionKey = env["ENCRYPTION_KEY"];
   if (encryptionKey && !/^[0-9a-fA-F]{64}$/.test(encryptionKey)) {
     errors.push("[startup] ENCRYPTION_KEY must be a 64-character hex string (32 bytes)");
@@ -73,6 +96,20 @@ export function validateEnv(
     const parsedPort = Number.parseInt(port, 10);
     if (!Number.isFinite(parsedPort) || !Number.isInteger(parsedPort) || parsedPort < 1024 || parsedPort > 65535) {
       errors.push(`[startup] Invalid PORT value: "${port}". Must be an integer between 1024 and 65535.`);
+    }
+  }
+
+  // Storage validation — when STORAGE_PROVIDER is s3 (or unset, since s3 is the
+  // default) the S3_BUCKET and S3_REGION variables are mandatory (issue #248).
+  const storageProvider = (env["STORAGE_PROVIDER"] ?? "s3").toLowerCase();
+  if (storageProvider === "s3") {
+    const missingS3 = ["S3_BUCKET", "S3_REGION"].filter((k) => !env[k]);
+    if (missingS3.length > 0) {
+      errors.push(
+        `[startup] S3 storage is enabled (STORAGE_PROVIDER=${storageProvider}) but the following ` +
+          `required variables are missing: ${missingS3.join(", ")}. ` +
+          `Set STORAGE_PROVIDER=local to use the local filesystem for development.`
+      );
     }
   }
 

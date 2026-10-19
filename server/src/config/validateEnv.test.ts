@@ -83,6 +83,25 @@ describe("validateEnv", () => {
     expect(result.missingOptional).toEqual(expect.arrayContaining([...OPTIONAL_ENV_VARS]));
   });
 
+  it("requires REDIS_URL when NODE_ENV is production", () => {
+    const prodEnvWithoutRedis = {
+      ...validFullEnv,
+      NODE_ENV: "production",
+      REDIS_URL: "",
+    };
+
+    const result = validateEnv(prodEnvWithoutRedis);
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((e) => e.includes("REDIS_URL is required in production"))).toBe(true);
+
+    const prodEnvWithRedis = {
+      ...validFullEnv,
+      NODE_ENV: "production",
+      REDIS_URL: "redis://localhost:6379",
+    };
+    expect(validateEnv(prodEnvWithRedis).valid).toBe(true);
+  });
+
   describe("assertEnvValid", () => {
     it("throws an error when required variables are missing", () => {
       expect(() => assertEnvValid({})).toThrow(/Missing required environment variables/);

@@ -48,9 +48,50 @@ acknowledgement within 48 hours, please follow up at security@airflex.io.
 
 ---
 
-## Scope
+## Stellar Key Handling & Client-Side Signing Model
 
-### In Scope
+### How transaction signing works
+
+AirFlex uses a **custodial wallet model** during its current phase: when a user
+completes their first OTP verification, the server generates a Stellar keypair,
+encrypts the secret key with `ENCRYPTION_KEY` (AES-256-GCM), and stores only
+the ciphertext in `wallets.stellar_secret_key`.
+
+When a buyer wants to lock a trade, signing happens **client-side**:
+
+1. `POST /api/v1/trades/:id/buy/prepare` — the server builds the unsigned XDR
+   envelope for the `deposit_to_escrow` Soroban invocation and returns it to
+   the browser. No secret material leaves the server.
+2. `POST /api/v1/wallet/unlock` — the server decrypts the caller's own secret
+   key and returns it **only to the key's owner** over the authenticated
+   session. The response carries `Cache-Control: no-store`. Rate-limited to 10
+   requests per 60 seconds per user.
+3. The browser signs the XDR envelope in memory using the decrypted key and
+   passes only the **signed XDR** to `POST /api/v1/trades/:id/buy`.
+4. The server submits the signed envelope to Horizon and records the resulting
+   transaction hash. The raw secret key is never present in any trade request
+   body, access log line, or database column.
+
+### What the server never does
+
+- **The server never accepts a `buyerSecretKey` field** in any request body.
+  The `buyTradeSchema` (Zod) accepts only `{ signedXdr: string }` — any
+  payload containing a secret key key field is rejected at schema validation.
+- The server never logs decrypted key material. The `unlock` endpoint logs only
+  the `user_id`, never the key value.
+- The decrypted key is never written to any database column, cache, or response
+  body other than the direct `/wallet/unlock` response.
+
+### Roadmap
+
+The `/wallet/unlock` endpoint is a **transitional mechanism** on the path to
+non-custodial wallets. Once users can import or generate their own keypair in a
+browser extension or hardware wallet, the endpoint will be removed and the
+server will never possess the secret key at all.
+
+---
+
+
 
 | Target | Examples |
 |--------|---------|
